@@ -1,0 +1,51 @@
+# ============================================================
+# AI-Hardened — API Dockerfile
+# Build offline após primeiro pull — zero dependência de PyPI em produção
+# SELOCK · selock.net
+# ============================================================
+
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# Instalar dependências em camada separada para cache
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# ── Imagem final ─────────────────────────────────────────────
+FROM python:3.11-slim
+
+LABEL maintainer="SELOCK <contato@selock.net>"
+LABEL description="AI-Hardened Private RAG API"
+LABEL version="1.0.0"
+
+# Usuário não-root para segurança
+RUN groupadd -r aiuser && useradd -r -g aiuser -d /app aiuser
+
+WORKDIR /app
+
+# Copiar dependências instaladas
+COPY --from=builder /install /usr/local
+
+# Copiar código da aplicação
+COPY src/ ./src/
+
+# Permissões
+RUN chown -R aiuser:aiuser /app
+USER aiuser
+
+# Variáveis padrão (sobrescritas pelo docker-compose)
+ENV VAULT_PATH=/mnt/ai_vault
+ENV OLLAMA_BASE_URL=http://ollama:11434
+ENV EMBED_MODEL=nomic-embed-text
+ENV LLM_MODEL=llama3:8b
+ENV RAG_TOP_K=5
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')" || exit 1
+
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2"]
