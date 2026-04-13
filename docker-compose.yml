@@ -1,0 +1,130 @@
+version: "3.9"
+
+# ============================================================
+# AI-Hardened — Stack Completo (100% Offline)
+# SELOCK · selock.net
+# ============================================================
+# CRÍTICO: Todos os serviços estão na rede interna "ai_hardened_net"
+# com driver "bridge" isolado. Nenhum serviço tem acesso à internet.
+# ============================================================
+
+networks:
+  ai_hardened_net:
+    driver: bridge
+    internal: true        # BLOQUEIA saída para internet no nível Docker
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  vault_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/ai_vault   # Volume LUKS montado
+  ollama_models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/ai-hardened/models
+
+services:
+
+  # ── Ollama LLM Engine ──────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ai_hardened_ollama
+    restart: unless-stopped
+    networks:
+      - ai_hardened_net
+    ports:
+      - "127.0.0.1:11434:11434"   # Bind SOMENTE localhost
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      - OLLAMA_HOST=127.0.0.1     # Bind interno
+      - OLLAMA_ORIGINS=http://127.0.0.1,http://172.28.0.0/16
+      - OLLAMA_MAX_LOADED_MODELS=2
+      - OLLAMA_NUM_PARALLEL=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── ChromaDB (Banco Vetorial) ──────────────────────────────
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: ai_hardened_chroma
+    restart: unless-stopped
+    networks:
+      - ai_hardened_net
+    ports:
+      - "127.0.0.1:8000:8000"   # Bind SOMENTE localhost
+    volumes:
+      - vault_data:/chroma/chroma
+    environment:
+      - CHROMA_SERVER_AUTHN_CREDENTIALS_FILE=/chroma/auth.json
+      - ANONYMIZED_TELEMETRY=False    # Zero telemetria
+      - ALLOW_RESET=False
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── FastAPI RAG Server ─────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: ai_hardened_api
+    restart: unless-stopped
+    networks:
+      - ai_hardened_net
+    ports:
+      - "127.0.0.1:8080:8080"   # Bind SOMENTE localhost
+    volumes:
+      - vault_data:/mnt/ai_vault
+      - ./src:/app/src
+    environment:
+      - VAULT_PATH=/mnt/ai_vault
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - CHROMA_HOST=chromadb
+      - EMBED_MODEL=nomic-embed-text
+      - LLM_MODEL=llama3:8b
+      - RAG_TOP_K=5
+    depends_on:
+      ollama:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Interface Web ──────────────────────────────────────────
+  ui:
+    image: nginx:alpine
+    container_name: ai_hardened_ui
+    restart: unless-stopped
+    networks:
+      - ai_hardened_net
+    ports:
+      - "127.0.0.1:3000:80"    # Bind SOMENTE localhost
+    volumes:
+      - ./src/ui:/usr/share/nginx/html:ro
+      - ./configs/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
