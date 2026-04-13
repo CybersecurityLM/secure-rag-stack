@@ -1,0 +1,26 @@
+# AI-Hardened — Dependências Python
+# Todas as bibliotecas são instaladas localmente — zero dependência em runtime
+
+# API
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+httpx==0.27.0
+pydantic==2.7.1
+
+# RAG
+langchain==0.2.1
+langchain-community==0.2.1
+chromadb==0.5.0
+
+# Document loaders
+pypdf==4.2.0
+python-docx==1.1.2
+unstructured==0.13.7
+markdown==3.6
+
+# Embeddings via Ollama (sem chamadas externas)
+# langchain-community já inclui OllamaEmbeddings
+
+# Utils
+python-multipart==0.0.9
+python-jose==3.3.0
